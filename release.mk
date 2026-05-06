@@ -38,9 +38,16 @@ SHELL := /bin/bash
 # PACKAGE_TYPE          zip | pkg                                  default: zip
 # ALSO_SHIP_PKG         true | false                               default: false
 # EMBEDDED_FRAMEWORKS   space-separated, embedded into bundle      e.g. Sparkle
-# ENTITLEMENTS          path to .entitlements file                 e.g. Reverie.entitlements
+# ENTITLEMENTS          path to MAIN bundle's .entitlements file   e.g. Reverie.entitlements
 # ICON_FILE             AppIcon.icns or other                      default: AppIcon.icns
 # DISTRIBUTION_XML      multi-component productbuild definition    e.g. Installer/Distribution.xml
+# PKG_RESOURCES         dir of Welcome.html/Conclusion.html etc    e.g. Installer
+# PKG_MAIN_IDENTIFIER   component-pkg identifier for main target   e.g. com.jorviksoftware.ASCIISaver.saver
+# PKG_MAIN_FILENAME     component-pkg filename, matches Dist.xml   e.g. ASCIISaver-saver.pkg
+# PKG_MAIN_SCRIPTS      per-main-component scripts dir             e.g. Installer/scripts
+# HELPER_TARGETS        space-sep colon-records (multi-target).
+#                       Each: <xcodeTarget>:<productName>:<entitlements>:<pkgIdentifier>:<pkgFilename>
+#                       e.g. ASCIISaverCameraAgent:ASCIISaverCameraAgent.app:CameraAgent/ASCIISaverCameraAgent.entitlements:com.jorviksoftware.ASCIISaver.agent:ASCIISaver-agent.pkg
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 INSTALL_NAME ?= $(PRODUCT_NAME)
@@ -112,6 +119,11 @@ release: package
 stamp: build
 	@echo "→ stamp $(VERSION) ($(BUILD_NUMBER))"
 	bash $(HELPERS_DIR)/stamp-version.sh "$(BUILT_BUNDLE)" "$(VERSION)" "$(BUILD_NUMBER)"
+	# Multi-target: stamp each helper bundle too.
+	for HELPER in $(HELPER_TARGETS); do
+		HELPER_PRODUCT=$$(echo "$$HELPER" | cut -d: -f2)
+		bash $(HELPERS_DIR)/stamp-version.sh "$(OUT_DIR)/$$HELPER_PRODUCT" "$(VERSION)" "$(BUILD_NUMBER)"
+	done
 
 sign: stamp
 	@echo "→ sign $(PRODUCT_NAME)"
@@ -167,6 +179,22 @@ sign: stamp
 	else
 		codesign --force --sign "$(SIGN_ID)" --options runtime --timestamp "$(BUILT_BUNDLE)"
 	fi
+	# Multi-target: sign each helper bundle (no nested-helper recursion;
+	# helper bundles are leaves in the suite. Add framework recursion
+	# here if a future app embeds Sparkle inside a helper).
+	for HELPER in $(HELPER_TARGETS); do
+		HELPER_PRODUCT=$$(echo "$$HELPER" | cut -d: -f2)
+		HELPER_ENT=$$(echo "$$HELPER" | cut -d: -f3)
+		echo "→ sign helper $$HELPER_PRODUCT"
+		xattr -cr "$(OUT_DIR)/$$HELPER_PRODUCT"
+		if [[ -n "$$HELPER_ENT" && -f "$$HELPER_ENT" ]]; then
+			codesign --force --sign "$(SIGN_ID)" --options runtime --timestamp \
+				--entitlements "$$HELPER_ENT" "$(OUT_DIR)/$$HELPER_PRODUCT"
+		else
+			codesign --force --sign "$(SIGN_ID)" --options runtime --timestamp \
+				"$(OUT_DIR)/$$HELPER_PRODUCT"
+		fi
+	done
 
 notarise: sign
 	@echo "→ notarise $(PRODUCT_NAME)"
@@ -180,6 +208,19 @@ notarise: sign
 		xcrun notarytool submit "$(NOTARIZE_ZIP)" \
 			--keychain-profile "$(NOTARY_PROFILE)" --wait --timeout 1800
 		rm -f "$(NOTARIZE_ZIP)"
+		# Multi-target: notarise each helper bundle too. RM's downstream
+		# Verify Notarisation stage walks every target listed in the
+		# catalogue and runs `stapler validate` on each, so each must
+		# carry its own ticket.
+		for HELPER in $(HELPER_TARGETS); do
+			HELPER_PRODUCT=$$(echo "$$HELPER" | cut -d: -f2)
+			HELPER_ZIP="$(OUT_DIR)/$$HELPER_PRODUCT-notarize.zip"
+			echo "→ notarise helper $$HELPER_PRODUCT"
+			ditto -c -k --keepParent "$(OUT_DIR)/$$HELPER_PRODUCT" "$$HELPER_ZIP"
+			xcrun notarytool submit "$$HELPER_ZIP" \
+				--keychain-profile "$(NOTARY_PROFILE)" --wait --timeout 1800
+			rm -f "$$HELPER_ZIP"
+		done
 	fi
 
 staple: notarise
@@ -188,6 +229,11 @@ staple: notarise
 		echo "  (skipped: ad-hoc signed)"
 	else
 		xcrun stapler staple "$(BUILT_BUNDLE)"
+		for HELPER in $(HELPER_TARGETS); do
+			HELPER_PRODUCT=$$(echo "$$HELPER" | cut -d: -f2)
+			echo "→ staple helper $$HELPER_PRODUCT"
+			xcrun stapler staple "$(OUT_DIR)/$$HELPER_PRODUCT"
+		done
 	fi
 
 # `package` is the dispatcher — fans out based on PACKAGE_TYPE and ALSO_SHIP_PKG.
@@ -238,14 +284,71 @@ package-pkg:
 		"$(HELPERS_DIR)/pkg-postinstall.sh.template" > "$(OUT_DIR)/_pkg_scripts/postinstall"
 	chmod +x "$(OUT_DIR)/_pkg_scripts/postinstall"
 ifdef DISTRIBUTION_XML
-	# Multi-component installer (ASCII Saver pattern). Each component pkg is
-	# expected to already exist in $(OUT_DIR)/<componentID>.pkg — projects with
-	# multi-component packages produce them via custom rules in their Makefile
-	# before `package-pkg` runs. productbuild assembles the distribution.
+	# Multi-component installer (ASCII Saver pattern). Build a component
+	# pkg for the main bundle and each helper, then productbuild combines
+	# them via Distribution.xml. The package-id and filename of each
+	# component must match the <pkg-ref> entries in Distribution.xml.
+	#
+	# Main component pkg.
+	if [[ -z "$(PKG_MAIN_IDENTIFIER)" ]]; then
+		echo "ERROR: PKG_MAIN_IDENTIFIER required when DISTRIBUTION_XML is set"
+		exit 1
+	fi
+	if [[ -z "$(PKG_MAIN_FILENAME)" ]]; then
+		echo "ERROR: PKG_MAIN_FILENAME required when DISTRIBUTION_XML is set"
+		exit 1
+	fi
+	echo "→ pkgbuild main $(PKG_MAIN_FILENAME) ($(PKG_MAIN_IDENTIFIER))"
+	rm -f "$(OUT_DIR)/$(PKG_MAIN_FILENAME)"
+	if [[ -n "$(PKG_MAIN_SCRIPTS)" && -d "$(PKG_MAIN_SCRIPTS)" ]]; then
+		pkgbuild --component "$(BUILT_BUNDLE)" \
+			--identifier "$(PKG_MAIN_IDENTIFIER)" \
+			--version "$(VERSION)" \
+			--install-location "$(INSTALL_ROOT)" \
+			--scripts "$(PKG_MAIN_SCRIPTS)" \
+			"$(OUT_DIR)/$(PKG_MAIN_FILENAME)"
+	else
+		pkgbuild --component "$(BUILT_BUNDLE)" \
+			--identifier "$(PKG_MAIN_IDENTIFIER)" \
+			--version "$(VERSION)" \
+			--install-location "$(INSTALL_ROOT)" \
+			"$(OUT_DIR)/$(PKG_MAIN_FILENAME)"
+	fi
+	# Helper component pkgs.
+	for HELPER in $(HELPER_TARGETS); do
+		HELPER_PRODUCT=$$(echo "$$HELPER" | cut -d: -f2)
+		HELPER_PKG_ID=$$(echo "$$HELPER" | cut -d: -f4)
+		HELPER_PKG_FILE=$$(echo "$$HELPER" | cut -d: -f5)
+		case "$$HELPER_PRODUCT" in
+			*.saver) HELPER_INSTALL_ROOT="/Library/Screen Savers" ;;
+			*) HELPER_INSTALL_ROOT="/Applications" ;;
+		esac
+		echo "→ pkgbuild helper $$HELPER_PKG_FILE ($$HELPER_PKG_ID)"
+		rm -f "$(OUT_DIR)/$$HELPER_PKG_FILE"
+		pkgbuild --component "$(OUT_DIR)/$$HELPER_PRODUCT" \
+			--identifier "$$HELPER_PKG_ID" \
+			--version "$(VERSION)" \
+			--install-location "$$HELPER_INSTALL_ROOT" \
+			"$(OUT_DIR)/$$HELPER_PKG_FILE"
+	done
+	# Combine via productbuild. --resources points at Welcome.html etc.
+	PB_RESOURCES_FLAG=""
+	if [[ -n "$(PKG_RESOURCES)" && -d "$(PKG_RESOURCES)" ]]; then
+		PB_RESOURCES_FLAG="--resources $(PKG_RESOURCES)"
+	elif [[ -n "$(dir $(DISTRIBUTION_XML))" && -d "$(dir $(DISTRIBUTION_XML))" ]]; then
+		PB_RESOURCES_FLAG="--resources $(dir $(DISTRIBUTION_XML))"
+	fi
 	productbuild --distribution "$(DISTRIBUTION_XML)" \
 		--package-path "$(OUT_DIR)" \
-		--resources "$(dir $(DISTRIBUTION_XML))" \
+		$$PB_RESOURCES_FLAG \
 		"$(PKG_PATH).unsigned"
+	# Strip the now-redundant component pkgs so RM's release-stage glob
+	# only finds the outer .pkg as a release asset.
+	rm -f "$(OUT_DIR)/$(PKG_MAIN_FILENAME)"
+	for HELPER in $(HELPER_TARGETS); do
+		HELPER_PKG_FILE=$$(echo "$$HELPER" | cut -d: -f5)
+		rm -f "$(OUT_DIR)/$$HELPER_PKG_FILE"
+	done
 else
 	# Single-component pkg from a renamed bundle.
 	# Use INSTALLED_BUNDLE if it exists (zip path renamed it); else the original.
@@ -281,6 +384,17 @@ clean:
 	rm -rf "$(OUT_DIR)/$(PRODUCT_NAME)" "$(OUT_DIR)/$(INSTALL_NAME)" \
 		"$(ZIP_PATH)" "$(PKG_PATH)" "$(NOTARIZE_ZIP)" \
 		"$(OUT_DIR)/_pkg_scripts" "$(OUT_DIR)/_verify"
+	# Multi-target detritus.
+	if [[ -n "$(PKG_MAIN_FILENAME)" ]]; then
+		rm -f "$(OUT_DIR)/$(PKG_MAIN_FILENAME)"
+	fi
+	for HELPER in $(HELPER_TARGETS); do
+		HELPER_PRODUCT=$$(echo "$$HELPER" | cut -d: -f2)
+		HELPER_PKG_FILE=$$(echo "$$HELPER" | cut -d: -f5)
+		rm -rf "$(OUT_DIR)/$$HELPER_PRODUCT" \
+			"$(OUT_DIR)/$$HELPER_PRODUCT-notarize.zip" \
+			"$(OUT_DIR)/$$HELPER_PKG_FILE"
+	done
 
 # ── Build dispatch ────────────────────────────────────────────────────────────
 # The actual `build` target dispatches by BUILD_SYSTEM. swiftc gets the most
@@ -379,6 +493,26 @@ build:
 		ARCHS='arm64 x86_64' \
 		ONLY_ACTIVE_ARCH=NO \
 		build
+	# Multi-target build: also compile each helper target into the same
+	# output dir. Helper records are colon-delimited; field 1 is the
+	# Xcode target name, field 2 is the productName for verification.
+	for HELPER in $(HELPER_TARGETS); do
+		HELPER_TARGET=$$(echo "$$HELPER" | cut -d: -f1)
+		HELPER_PRODUCT=$$(echo "$$HELPER" | cut -d: -f2)
+		echo "→ build helper $$HELPER_PRODUCT (xcodebuild target $$HELPER_TARGET)"
+		xcodebuild -project "$(XCODE_PROJECT)" \
+			-target "$$HELPER_TARGET" \
+			-configuration Release \
+			CONFIGURATION_BUILD_DIR="$(OUT_DIR)" \
+			CODE_SIGNING_ALLOWED=NO \
+			ARCHS='arm64 x86_64' \
+			ONLY_ACTIVE_ARCH=NO \
+			build
+		if [[ ! -d "$(OUT_DIR)/$$HELPER_PRODUCT" ]]; then
+			echo "ERROR: helper build did not produce $$HELPER_PRODUCT in $(OUT_DIR)"
+			exit 1
+		fi
+	done
 	# Strip xcodebuild detritus.
 	rm -rf "$(OUT_DIR)"/*.swiftmodule "$(OUT_DIR)"/*.dSYM
 
