@@ -203,10 +203,18 @@ endif
 
 package-zip:
 	@echo "→ package-zip $(BUNDLE_NAME).zip"
-	# Rename pre-zip if installName differs from productName.
+	# When INSTALL_NAME differs from PRODUCT_NAME, *copy* the bundle to
+	# the install-name location rather than renaming. Two reasons:
+	# (a) the .zip needs to contain the install-name bundle so users see
+	#     a friendly name on extract;
+	# (b) RM's downstream Verify Build / Verify Signing / Verify
+	#     Notarisation stages still expect the bundle at PRODUCT_NAME
+	#     (because that's what the catalogue's target.productName says).
+	# Cost is a few MB of extra disk during the build, which gets cleaned
+	# at the end of the pipeline anyway.
 	if [[ "$(INSTALL_NAME)" != "$(PRODUCT_NAME)" ]]; then
 		rm -rf "$(INSTALLED_BUNDLE)"
-		mv "$(BUILT_BUNDLE)" "$(INSTALLED_BUNDLE)"
+		cp -R "$(BUILT_BUNDLE)" "$(INSTALLED_BUNDLE)"
 	fi
 	rm -f "$(ZIP_PATH)"
 	cd "$(OUT_DIR)" && ditto -c -k --keepParent "$(INSTALL_NAME)" "$(BUNDLE_NAME).zip"
