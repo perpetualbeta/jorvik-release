@@ -1,0 +1,30 @@
+#!/bin/bash
+# pkg-postinstall.sh.template — postinstall script template embedded into .pkg
+# installers by release.mk's package-pkg recipe. Two responsibilities:
+#
+# 1. installName relocation. When PRODUCT_NAME != INSTALL_NAME (e.g.
+#    JorvikReleaseManager.app → "Jorvik Release Manager.app") Apple's
+#    Installer lays the payload at PRODUCT_NAME and we move it. Discovered
+#    on Release Manager 2.0.0–2.0.2 which all installed over the bare
+#    JorvikReleaseManager.app slot until this hook was added.
+#
+# 2. Quarantine strip. Belt-and-braces; the Installer normally handles this,
+#    but if an edge case leaves com.apple.quarantine attached, App
+#    Translocation fires on first launch and our app runs from a temp dir.
+#
+# Substitution tokens (release.mk replaces these via sed before pkgbuild):
+#   {{INSTALL_ROOT}}   /Applications  or  /Library/Screen Savers
+#   {{PRODUCT_NAME}}   bundle name as built (e.g. JorvikReleaseManager.app)
+#   {{INSTALL_NAME}}   bundle name as displayed (e.g. Jorvik Release Manager.app)
+
+set -eu -o pipefail
+
+old="{{INSTALL_ROOT}}/{{PRODUCT_NAME}}"
+new="{{INSTALL_ROOT}}/{{INSTALL_NAME}}"
+
+if [[ "$old" != "$new" && -d "$old" && ! -L "$old" && ! -e "$new" ]]; then
+    mv "$old" "$new"
+fi
+
+xattr -dr com.apple.quarantine "$new" 2>/dev/null || true
+exit 0
