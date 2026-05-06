@@ -120,13 +120,22 @@ sign: stamp
 	for FW in $(EMBEDDED_FRAMEWORKS); do
 		bash $(HELPERS_DIR)/sign-framework.sh "$(BUILT_BUNDLE)/Contents/Frameworks/$$FW.framework" "$(SIGN_ID)"
 	done
-	# Sign nested helper apps inside the bundle (rare, but ASCII Saver-style).
-	if [[ -d "$(BUILT_BUNDLE)/Contents/Library/LoginItems" ]]; then
-		for HELPER in "$(BUILT_BUNDLE)"/Contents/Library/LoginItems/*.app; do
-			[[ -d "$$HELPER" ]] || continue
-			codesign --force --sign "$(SIGN_ID)" --options runtime --timestamp "$$HELPER"
-		done
-	fi
+	# Sign nested signable items inside the bundle, deepest-first. Covers:
+	#   Contents/Library/LoginItems/<helper>.app  — ASCII Saver, MenuTidy LoginItem
+	#   Contents/Helpers/<helper>.app             — ActiveSpace MouseCatcher
+	#   Contents/PlugIns/<extension>.appex        — extensions, when added
+	#   Contents/XPCServices/<service>.xpc        — rare; usually inside frameworks
+	# `find -d` walks depth-first so deepest items come first, satisfying
+	# codesign's leaves-first requirement without per-project knowledge.
+	# Items inside `*.framework/` are skipped because sign-framework.sh
+	# already handled them.
+	while IFS= read -r -d '' NESTED; do
+		case "$$NESTED" in
+			"$(BUILT_BUNDLE)") continue ;;
+			*/*.framework/*) continue ;;
+		esac
+		codesign --force --sign "$(SIGN_ID)" --options runtime --timestamp "$$NESTED"
+	done < <(find "$(BUILT_BUNDLE)" -d \( -name '*.app' -o -name '*.xpc' -o -name '*.appex' \) -print0)
 	# Seal the main bundle. Entitlements file passed if set.
 	if [[ -n "$(ENTITLEMENTS)" && -f "$(ENTITLEMENTS)" ]]; then
 		codesign --force --sign "$(SIGN_ID)" --options runtime --timestamp \
