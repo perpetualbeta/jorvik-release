@@ -47,6 +47,9 @@ INSTALL_NAME ?= $(PRODUCT_NAME)
 PACKAGE_TYPE ?= zip
 ALSO_SHIP_PKG ?= false
 ICON_FILE ?= AppIcon.icns
+# Path to the project's Info.plist. Most apps keep it at project root;
+# SPM apps that put it under Resources/ override this (e.g. ClipMan).
+INFO_PLIST ?= Info.plist
 
 # ── Variables expected from environment (RM passes these) ─────────────────────
 # VERSION             marketing version             e.g. 1.0.0
@@ -285,8 +288,8 @@ build:
 	      "$(BUILT_BUNDLE)/Contents/MacOS/$(BUNDLE_NAME)_x86_64"
 	# Info.plist: project's Info.plist is the source of truth for everything
 	# except CFBundleShortVersionString and CFBundleVersion (which `stamp`
-	# overwrites pre-sign).
-	cp Info.plist "$(BUILT_BUNDLE)/Contents/Info.plist"
+	# overwrites pre-sign). Path is configurable via INFO_PLIST.
+	cp "$(INFO_PLIST)" "$(BUILT_BUNDLE)/Contents/Info.plist"
 	# Resources: copy everything from Resources/ if it exists (Daily News
 	# broke without this). Excludes the .iconset intermediate dir.
 	if [[ -d Resources ]]; then
@@ -330,16 +333,38 @@ endif  # xcode
 
 ifeq ($(BUILD_SYSTEM),spm)
 
+# When the project vendors any framework under EMBEDDED_FRAMEWORKS (Sparkle
+# is the only current case), forward search-path + rpath flags to BOTH
+# swiftc and ld so `import <Name>` resolves at compile time and ld can
+# find <Name>.framework on disk at link time. The actual `-framework <Name>`
+# linker directive is contributed automatically by Swift's auto-link
+# mechanism — explicit `-framework` flags here would be redundant and
+# made ld fail "framework not found" before auto-link's own flags ran.
+ifneq ($(strip $(EMBEDDED_FRAMEWORKS)),)
+SPM_EMBED_FLAGS := -Xswiftc -F -Xswiftc "$(CURDIR)" \
+                   -Xlinker -F -Xlinker "$(CURDIR)" \
+                   -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+else
+SPM_EMBED_FLAGS :=
+endif
+
 build:
 	@echo "→ build $(PRODUCT_NAME) (swift build, universal)"
 	swift build -c release --arch arm64 --arch x86_64 \
-		--product "$(SPM_PRODUCT)"
+		--product "$(SPM_PRODUCT)" $(SPM_EMBED_FLAGS)
 	mkdir -p "$(BUILT_BUNDLE)/Contents/MacOS" "$(BUILT_BUNDLE)/Contents/Resources"
-	cp ".build/apple/Products/Release/$(SPM_PRODUCT)" \
-		"$(BUILT_BUNDLE)/Contents/MacOS/$(BUNDLE_NAME)"
-	cp Info.plist "$(BUILT_BUNDLE)/Contents/Info.plist"
+	# Universal binary at .build/apple/...; fall back to single-arch path
+	# if SPM hasn't laid out the universal directory for some reason.
+	if [[ -f ".build/apple/Products/Release/$(SPM_PRODUCT)" ]]; then
+		cp ".build/apple/Products/Release/$(SPM_PRODUCT)" \
+			"$(BUILT_BUNDLE)/Contents/MacOS/$(BUNDLE_NAME)"
+	else
+		cp ".build/release/$(SPM_PRODUCT)" \
+			"$(BUILT_BUNDLE)/Contents/MacOS/$(BUNDLE_NAME)"
+	fi
+	cp "$(INFO_PLIST)" "$(BUILT_BUNDLE)/Contents/Info.plist"
 	if [[ -d Resources ]]; then
-		find Resources -mindepth 1 -maxdepth 1 ! -name "*.iconset" \
+		find Resources -mindepth 1 -maxdepth 1 ! -name "*.iconset" ! -name "Info.plist" \
 			-exec cp -R {} "$(BUILT_BUNDLE)/Contents/Resources/" \;
 	fi
 	# Project-root icon fallback (see swiftc block for rationale).
