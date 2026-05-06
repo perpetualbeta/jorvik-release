@@ -94,16 +94,17 @@ MACOS_TARGET := 14.0
 SDK := $(shell xcrun --sdk macosx --show-sdk-path)
 
 # ── Top-level targets ─────────────────────────────────────────────────────────
+# All targets are .PHONY because Make cannot have a file-target whose path
+# contains a space (e.g. "/Users/jonathanhollin/Desktop/Jorvik Software/...").
+# Inside recipes, paths are quoted so the shell handles spaces correctly.
+
 .PHONY: release build stamp sign notarise staple package package-zip package-pkg clean
 
 release: package
 	@echo "✅ release: $(BUNDLE_NAME) $(VERSION) ($(BUILD_NUMBER))"
 
 # Pipeline order: build → stamp (pre-sign) → sign → notarise → staple → package.
-# `package` depends on `staple`; `staple` on `notarise`; etc. Make's
-# prerequisite chain enforces order.
-
-build: $(BUILT_BUNDLE)
+# Make's prerequisite chain enforces order.
 
 stamp: build
 	@echo "→ stamp $(VERSION) ($(BUILD_NUMBER))"
@@ -265,7 +266,7 @@ else
 SWIFTC_OUTPUT_FLAGS :=
 endif
 
-$(BUILT_BUNDLE):
+build:
 	@echo "→ build $(PRODUCT_NAME) (swiftc, universal)"
 	@mkdir -p "$(BUILT_BUNDLE)/Contents/MacOS" "$(BUILT_BUNDLE)/Contents/Resources"
 	# Per-arch compile, then lipo. arm64 first, x86_64 second, then merge.
@@ -302,7 +303,7 @@ endif  # swiftc
 
 ifeq ($(BUILD_SYSTEM),xcode)
 
-$(BUILT_BUNDLE):
+build:
 	@echo "→ build $(PRODUCT_NAME) (xcodebuild, universal)"
 	xattr -cr "$(CURDIR)"
 	rm -rf "$(OUT_DIR)"
@@ -322,7 +323,7 @@ endif  # xcode
 
 ifeq ($(BUILD_SYSTEM),spm)
 
-$(BUILT_BUNDLE):
+build:
 	@echo "→ build $(PRODUCT_NAME) (swift build, universal)"
 	swift build -c release --arch arm64 --arch x86_64 \
 		--product "$(SPM_PRODUCT)"

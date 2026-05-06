@@ -1,8 +1,18 @@
 # jorvik-release
 
-Shared Make include for Jorvik Software project releases. Each project's `Makefile` declares its identity (bundle name, build system, frameworks, etc.) and `include`s `release.mk`. The single `make release` target then handles build → version stamp → sign → notarise → staple → package end-to-end, in shell, where `codesign`, `xcrun notarytool`, `pkgbuild`, and `ditto` are first-class citizens.
+Shared Make include for Jorvik Software project releases. Each project's `Makefile` declares its identity (bundle name, build system, frameworks, etc.) and `include`s `release.mk`. The single `gmake release` target then handles build → version stamp → sign → notarise → staple → package end-to-end, in shell, where `codesign`, `xcrun notarytool`, `pkgbuild`, and `ditto` are first-class citizens.
 
-This replaces the per-app build/sign/package logic that used to live inside [Release Manager](https://github.com/PerpetualBeta/JorvikReleaseManager)'s Swift `PipelineEngine`. RM now dispatches `make release` with a handful of environment variables and re-verifies the resulting artefacts; it no longer re-implements `xcodebuild`, `codesign --deep`, or `pkgbuild` invocations in Swift.
+## Prerequisites
+
+GNU Make **4.0+** (the macOS-bundled `/usr/bin/make` is 3.81 from 2006 and lacks `.ONESHELL` and `.SHELLFLAGS`):
+
+```bash
+brew install make
+```
+
+Homebrew installs it as `gmake` to avoid clobbering the system `make`. Invoke as `gmake release …` everywhere; Release Manager invokes `gmake` explicitly.
+
+This replaces the per-app build/sign/package logic that used to live inside [Release Manager](https://github.com/PerpetualBeta/JorvikReleaseManager)'s Swift `PipelineEngine`. RM now dispatches `gmake release` with a handful of environment variables and re-verifies the resulting artefacts; it no longer re-implements `xcodebuild`, `codesign --deep`, or `pkgbuild` invocations in Swift.
 
 ## Layout
 
@@ -16,12 +26,13 @@ jorvik-release/
 └── README.md
 ```
 
-Clone path on the dev machine: `~/Desktop/Jorvik Software/jorvik-release/`. Each Jorvik project's `Makefile` references the include via the `JORVIK_RELEASE_MK` env var (RM exports it) with a fallback for terminal use:
+Clone path on the dev machine: `~/Desktop/Jorvik Software/jorvik-release/`. Each Jorvik project's `Makefile` references the include via a relative path (the absolute path contains a space and Make's `include` directive treats whitespace as a path-list separator):
 
 ```makefile
-JORVIK_RELEASE_MK ?= ../jorvik-release/release.mk
-include $(JORVIK_RELEASE_MK)
+include ../jorvik-release/release.mk
 ```
+
+This works under terminal `gmake` (cwd = project dir) and under RM (RM `cd`'s to `sourcePath` before invoking `gmake`).
 
 ## Project Makefile contract
 
@@ -42,8 +53,7 @@ ALSO_SHIP_PKG    := true
 EMBEDDED_FRAMEWORKS := Sparkle
 ENTITLEMENTS     := MenuTidy.entitlements
 
-JORVIK_RELEASE_MK ?= ../jorvik-release/release.mk
-include $(JORVIK_RELEASE_MK)
+include ../jorvik-release/release.mk
 ```
 
 ### Required variables (every project)
@@ -100,9 +110,8 @@ include $(JORVIK_RELEASE_MK)
 | `INSTALLER_SIGN_ID` | for `.pkg` distribution | _(none)_ | Developer ID Installer identity |
 | `NOTARY_PROFILE` | for distribution | `JorvikNotary` | `xcrun notarytool` keychain profile |
 | `OUT_DIR` | recommended | `$(CURDIR)/_BuildOutput` | Where artefacts land |
-| `JORVIK_RELEASE_MK` | recommended | _(relative include in project Makefile)_ | Absolute path to this `release.mk` |
 
-When `SIGN_ID` is `-` (the default), notarisation is skipped — useful for local development. RM always exports a real identity.
+When `SIGN_ID` is `-` (the default for terminal use), notarisation is skipped — useful for local development. RM always exports a real identity.
 
 ## Targets exposed
 
@@ -135,7 +144,7 @@ When `SIGN_ID` is `-` (the default), notarisation is skipped — useful for loca
 ## What it doesn't handle (RM keeps these)
 
 - **Preflight** — cert availability, gh auth, notarytool keychain profile validation.
-- **Independent verification** — RM runs `codesign -dvv`, `spctl --assess`, and `stapler validate` against the artefacts after `make release` finishes, cross-checked against the catalogue's `expectedEntitlements`.
+- **Independent verification** — RM runs `codesign -dvv`, `spctl --assess`, and `stapler validate` against the artefacts after `gmake release` finishes, cross-checked against the catalogue's `expectedEntitlements`.
 - **Sparkle EdDSA appcast signing** — RM runs `sign_update` on the `.zip` and captures the structured signature + size into the appcast generator.
 - **GitHub release upload** — `gh release create`, asset attachment, catalogue write-back of `lastBuiltZipURL` and `currentVersion`.
 
@@ -143,7 +152,7 @@ When `SIGN_ID` is `-` (the default), notarisation is skipped — useful for loca
 
 ```bash
 cd ~/Desktop/Jorvik\ Software/Reverie
-make release VERSION=1.0.1 \
+gmake release VERSION=1.0.1 \
     SIGN_ID="Developer ID Application: Jonthan Hollin (EG86BCGUE7)" \
     INSTALLER_SIGN_ID="Developer ID Installer: Jonthan Hollin (EG86BCGUE7)" \
     NOTARY_PROFILE=JorvikNotary
