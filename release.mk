@@ -293,6 +293,13 @@ build:
 		find Resources -mindepth 1 -maxdepth 1 ! -name "*.iconset" \
 			-exec cp -R {} "$(BUILT_BUNDLE)/Contents/Resources/" \;
 	fi
+	# Two project layouts exist for the icon:
+	#   (a) icon under Resources/ (Reverie, Daily News) — handled above
+	#   (b) icon at project root (MenuTidy and most other public apps)
+	# This handles (b) — copy root-level ICON_FILE if not already in place.
+	if [[ -f "$(ICON_FILE)" && ! -f "$(BUILT_BUNDLE)/Contents/Resources/$(ICON_FILE)" ]]; then
+		cp "$(ICON_FILE)" "$(BUILT_BUNDLE)/Contents/Resources/$(ICON_FILE)"
+	fi
 	# Embed frameworks.
 	for FW in $(EMBEDDED_FRAMEWORKS); do
 		mkdir -p "$(BUILT_BUNDLE)/Contents/Frameworks"
@@ -334,6 +341,10 @@ build:
 	if [[ -d Resources ]]; then
 		find Resources -mindepth 1 -maxdepth 1 ! -name "*.iconset" \
 			-exec cp -R {} "$(BUILT_BUNDLE)/Contents/Resources/" \;
+	fi
+	# Project-root icon fallback (see swiftc block for rationale).
+	if [[ -f "$(ICON_FILE)" && ! -f "$(BUILT_BUNDLE)/Contents/Resources/$(ICON_FILE)" ]]; then
+		cp "$(ICON_FILE)" "$(BUILT_BUNDLE)/Contents/Resources/$(ICON_FILE)"
 	fi
 	for FW in $(EMBEDDED_FRAMEWORKS); do
 		mkdir -p "$(BUILT_BUNDLE)/Contents/Frameworks"
