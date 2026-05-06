@@ -353,6 +353,14 @@ build:
 	# Errors suppressed because the recursion hits read-only .git/objects/
 	# entries; we only care about the source tree's actual files.
 	xattr -cr "$(CURDIR)" 2>/dev/null || true
+	# If a stale _BuildOutput exists at the project root and isn't where
+	# we're actually writing this run, clear it. xcodebuild's stricter
+	# sandbox in Xcode 26+ otherwise emits "Stale file outside allowed
+	# root paths" warnings for every artefact left over from a previous
+	# local terminal build (where OUT_DIR=$(CURDIR)/_BuildOutput).
+	if [[ -d "$(CURDIR)/_BuildOutput" && "$(OUT_DIR)" != "$(CURDIR)/_BuildOutput" ]]; then
+		rm -rf "$(CURDIR)/_BuildOutput"
+	fi
 	rm -rf "$(OUT_DIR)"
 	mkdir -p "$(OUT_DIR)"
 	xcodebuild -project "$(XCODE_PROJECT)" \
