@@ -120,15 +120,15 @@ sign: stamp
 	for FW in $(EMBEDDED_FRAMEWORKS); do
 		bash $(HELPERS_DIR)/sign-framework.sh "$(BUILT_BUNDLE)/Contents/Frameworks/$$FW.framework" "$(SIGN_ID)"
 	done
-	# Sign nested signable items inside the bundle, deepest-first. Covers:
+	# Pre-sign nested signable items inside the bundle, deepest-first.
+	# Two passes: bundle-style nested code, then bare Mach-O binaries.
+	#
+	# Pass 1 — nested .app/.xpc/.appex bundles. Covers:
 	#   Contents/Library/LoginItems/<helper>.app  — ASCII Saver, MenuTidy LoginItem
 	#   Contents/Helpers/<helper>.app             — ActiveSpace MouseCatcher
 	#   Contents/PlugIns/<extension>.appex        — extensions, when added
 	#   Contents/XPCServices/<service>.xpc        — rare; usually inside frameworks
-	# `find -d` walks depth-first so deepest items come first, satisfying
-	# codesign's leaves-first requirement without per-project knowledge.
-	# Items inside `*.framework/` are skipped because sign-framework.sh
-	# already handled them.
+	# Items inside *.framework/ are skipped (sign-framework.sh handled those).
 	while IFS= read -r -d '' NESTED; do
 		case "$$NESTED" in
 			"$(BUILT_BUNDLE)") continue ;;
@@ -136,6 +136,30 @@ sign: stamp
 		esac
 		codesign --force --sign "$(SIGN_ID)" --options runtime --timestamp "$$NESTED"
 	done < <(find "$(BUILT_BUNDLE)" -d \( -name '*.app' -o -name '*.xpc' -o -name '*.appex' \) -print0)
+	# Pass 2 — bare Mach-O binaries placed at non-standard locations
+	# (e.g. ActiveSpace's Contents/Resources/switch_helper). codesign on
+	# the outer bundle treats these as opaque resources, NOT as nested
+	# code, so notarisation rejects them with "binary not signed with a
+	# valid Developer ID certificate". Pre-signing them here means the
+	# outer seal hashes a properly-signed file.
+	#
+	# Skip the main executable (codesign on the bundle covers it) and
+	# anything inside an already-signed sub-bundle. file(1) detection
+	# avoids signing ordinary resources that happen to have +x set.
+	MAIN_EXEC="$(BUILT_BUNDLE)/Contents/MacOS/$(BUNDLE_NAME)"
+	while IFS= read -r -d '' BIN; do
+		[[ "$$BIN" == "$$MAIN_EXEC" ]] && continue
+		REL="$${BIN#$(BUILT_BUNDLE)/}"
+		case "$$REL" in
+			*.framework/*|*/*.framework/*) continue ;;
+			*.app/*|*/*.app/*) continue ;;
+			*.xpc/*|*/*.xpc/*) continue ;;
+			*.appex/*|*/*.appex/*) continue ;;
+		esac
+		if file -b "$$BIN" 2>/dev/null | grep -q "Mach-O"; then
+			codesign --force --sign "$(SIGN_ID)" --options runtime --timestamp "$$BIN"
+		fi
+	done < <(find "$(BUILT_BUNDLE)" -type f -print0)
 	# Seal the main bundle. Entitlements file passed if set.
 	if [[ -n "$(ENTITLEMENTS)" && -f "$(ENTITLEMENTS)" ]]; then
 		codesign --force --sign "$(SIGN_ID)" --options runtime --timestamp \
