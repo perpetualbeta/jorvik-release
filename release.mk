@@ -315,7 +315,11 @@ ifeq ($(BUILD_SYSTEM),xcode)
 
 build:
 	@echo "→ build $(PRODUCT_NAME) (xcodebuild, universal)"
-	xattr -cr "$(CURDIR)"
+	# Strip stray com.apple.quarantine xattrs from vendored frameworks
+	# (Safari downloads attach this; it silently corrupts signatures).
+	# Errors suppressed because the recursion hits read-only .git/objects/
+	# entries; we only care about the source tree's actual files.
+	xattr -cr "$(CURDIR)" 2>/dev/null || true
 	rm -rf "$(OUT_DIR)"
 	mkdir -p "$(OUT_DIR)"
 	xcodebuild -project "$(XCODE_PROJECT)" \
