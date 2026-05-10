@@ -350,18 +350,46 @@ ifdef DISTRIBUTION_XML
 		rm -f "$(OUT_DIR)/$$HELPER_PKG_FILE"
 	done
 else
-	# Single-component pkg from a renamed bundle.
-	# Use INSTALLED_BUNDLE if it exists (zip path renamed it); else the original.
+	# Single-component pkg, non-relocatable.
+	#
+	# `pkgbuild --component <bundle>` defaults to BundleIsRelocatable=YES.
+	# At install time the macOS Installer then searches the user's
+	# volumes (via LaunchServices/Spotlight) for any existing bundle
+	# carrying our bundle ID and installs over THAT location instead
+	# of --install-location. For an app the user has only ever built
+	# locally on their Desktop, that means the .pkg silently installs
+	# into the dev tree — /Applications stays empty, Spotlight finds
+	# the wrong copy, and the macOS Installer also throws a TCC
+	# prompt for Desktop access during the volume search.
+	#
+	# Stage the bundle into a clean dir, generate a component plist
+	# via --analyze, force BundleIsRelocatable=NO, and build with
+	# --root. The pkg now lands exactly where INSTALL_ROOT says.
+	#
+	# (TODO: the multi-component / DISTRIBUTION_XML branch above has
+	# the same defaulting; ASCII Saver hasn't hit it because savers
+	# install to /Library/Screen Savers which the volume search
+	# doesn't find dev builds in. Worth migrating that branch to the
+	# same pattern next time it's touched.)
 	BUNDLE_FOR_PKG="$(BUILT_BUNDLE)"
 	if [[ -d "$(INSTALLED_BUNDLE)" && "$(INSTALL_NAME)" != "$(PRODUCT_NAME)" ]]; then
 		BUNDLE_FOR_PKG="$(INSTALLED_BUNDLE)"
 	fi
-	pkgbuild --component "$$BUNDLE_FOR_PKG" \
+	PKG_STAGING="$(OUT_DIR)/_pkg_staging"
+	PKG_COMPONENT_PLIST="$(OUT_DIR)/_pkg_component.plist"
+	rm -rf "$$PKG_STAGING" "$$PKG_COMPONENT_PLIST"
+	mkdir -p "$$PKG_STAGING"
+	cp -R "$$BUNDLE_FOR_PKG" "$$PKG_STAGING/"
+	pkgbuild --analyze --root "$$PKG_STAGING" "$$PKG_COMPONENT_PLIST"
+	plutil -replace 0.BundleIsRelocatable -bool NO "$$PKG_COMPONENT_PLIST"
+	pkgbuild --root "$$PKG_STAGING" \
+		--component-plist "$$PKG_COMPONENT_PLIST" \
 		--identifier "$(BUNDLE_ID)" \
 		--version "$(VERSION)" \
 		--install-location "$(INSTALL_ROOT)" \
 		--scripts "$(OUT_DIR)/_pkg_scripts" \
 		"$(PKG_PATH).unsigned"
+	rm -rf "$$PKG_STAGING" "$$PKG_COMPONENT_PLIST"
 endif
 	# productsign with Developer ID Installer.
 	if [[ -n "$(INSTALLER_SIGN_ID)" ]]; then
@@ -383,7 +411,8 @@ endif
 clean:
 	rm -rf "$(OUT_DIR)/$(PRODUCT_NAME)" "$(OUT_DIR)/$(INSTALL_NAME)" \
 		"$(ZIP_PATH)" "$(PKG_PATH)" "$(NOTARIZE_ZIP)" \
-		"$(OUT_DIR)/_pkg_scripts" "$(OUT_DIR)/_verify"
+		"$(OUT_DIR)/_pkg_scripts" "$(OUT_DIR)/_pkg_staging" \
+		"$(OUT_DIR)/_pkg_component.plist" "$(OUT_DIR)/_verify"
 	# Multi-target detritus.
 	if [[ -n "$(PKG_MAIN_FILENAME)" ]]; then
 		rm -f "$(OUT_DIR)/$(PKG_MAIN_FILENAME)"
