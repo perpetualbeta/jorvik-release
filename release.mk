@@ -70,7 +70,7 @@ INFO_PLIST ?= Info.plist
 # When run from terminal without RM, sensible fallbacks let `make release`
 # work locally (will use ad-hoc signing if SIGN_ID isn't set).
 
-OUT_DIR ?= $(CURDIR)/_BuildOutput
+OUT_DIR ?= $(CURDIR)/.build
 SIGN_ID ?= -
 INSTALLER_SIGN_ID ?=
 NOTARY_PROFILE ?= JorvikNotary
@@ -504,11 +504,11 @@ build:
 	# Errors suppressed because the recursion hits read-only .git/objects/
 	# entries; we only care about the source tree's actual files.
 	xattr -cr "$(CURDIR)" 2>/dev/null || true
-	# If a stale _BuildOutput exists at the project root and isn't where
-	# we're actually writing this run, clear it. xcodebuild's stricter
-	# sandbox in Xcode 26+ otherwise emits "Stale file outside allowed
-	# root paths" warnings for every artefact left over from a previous
-	# local terminal build (where OUT_DIR=$(CURDIR)/_BuildOutput).
+	# Legacy `_BuildOutput` cleanup: OUT_DIR moved to `.build` (matching the
+	# Swift toolchain convention). Older builds may have left a `_BuildOutput`
+	# directory behind, which xcodebuild's stricter sandbox in Xcode 26+
+	# flags as "Stale file outside allowed root paths". Sweep it on each
+	# build if we're not actively writing there.
 	if [[ -d "$(CURDIR)/_BuildOutput" && "$(OUT_DIR)" != "$(CURDIR)/_BuildOutput" ]]; then
 		rm -rf "$(CURDIR)/_BuildOutput"
 	fi

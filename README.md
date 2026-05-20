@@ -109,7 +109,7 @@ include ../jorvik-release/release.mk
 | `SIGN_ID` | for distribution | `-` (ad-hoc) | Developer ID Application identity |
 | `INSTALLER_SIGN_ID` | for `.pkg` distribution | _(none)_ | Developer ID Installer identity |
 | `NOTARY_PROFILE` | for distribution | `JorvikNotary` | `xcrun notarytool` keychain profile |
-| `OUT_DIR` | recommended | `$(CURDIR)/_BuildOutput` | Where artefacts land |
+| `OUT_DIR` | recommended | `$(CURDIR)/.build` | Where artefacts land |
 
 When `SIGN_ID` is `-` (the default for terminal use), notarisation is skipped — useful for local development. RM always exports a real identity.
 
