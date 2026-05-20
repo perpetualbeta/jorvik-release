@@ -507,7 +507,7 @@ build:
 	# xcodebuild's stricter sandbox in Xcode 26+ flags artefacts in any
 	# previously-used CONFIGURATION_BUILD_DIR that isn't part of the
 	# current build's outputs as "Stale file outside allowed root paths".
-	# Two sources of those stale paths:
+	# Pre-build cleanup handles the cases under our control:
 	#
 	#   (a) other project-root build dirs (the legacy `_BuildOutput/` from
 	#       before we moved to `.build/`, or a project-local `.build/`
@@ -517,12 +517,20 @@ build:
 	#       manifest, which xcodebuild uses to remember past output
 	#       locations across invocations.
 	#
-	# Sweep both. (a) gets the FS clean; (b) gets xcodebuild's memory of
-	# previous OUT_DIRs cleared so the sandbox doesn't reference them at
-	# all. Cost: this xcode build can't use incremental caching from a
-	# previous run — full rebuild every time. For Jorvik xcode projects
-	# (RM, ASCII Saver, Notes Editor, Web Editor, ActiveSpace, Calendar
-	# Upcoming) that's seconds, not minutes.
+	# That leaves a separate residual class of warnings: xcodebuild tracks
+	# at least one prior CONFIGURATION_BUILD_DIR in some path we have not
+	# been able to identify (not LS, not DerivedData, not /Library, not
+	# any service we can find — verified empirically while debugging the
+	# ASCII Saver helper-target build). Killing services, sweeping LS,
+	# and wiping DerivedData all leave the warnings intact. They are
+	# cosmetic — every documented build output lands at the current
+	# OUT_DIR — so the build target filters this specific warning class
+	# out of xcodebuild's stdout/stderr below. All other warnings/errors
+	# pass through unchanged.
+	#
+	# Cost of the cleanup itself: this xcode build can't reuse incremental
+	# caching — full rebuild every time. For the six Jorvik xcode projects
+	# that's seconds, not minutes.
 	for STALE_DIR in "$(CURDIR)/_BuildOutput" "$(CURDIR)/.build"; do
 		if [[ -d "$$STALE_DIR" && "$(OUT_DIR)" != "$$STALE_DIR" ]]; then
 			rm -rf "$$STALE_DIR"
@@ -538,7 +546,7 @@ build:
 		CODE_SIGNING_ALLOWED=NO \
 		ARCHS='arm64 x86_64' \
 		ONLY_ACTIVE_ARCH=NO \
-		build
+		build 2>&1 | awk '!/warning: Stale file .* is located outside of the allowed root paths\./'
 	# Multi-target build: also compile each helper target into the same
 	# output dir. Helper records are colon-delimited; field 1 is the
 	# Xcode target name, field 2 is the productName for verification.
@@ -553,7 +561,7 @@ build:
 			CODE_SIGNING_ALLOWED=NO \
 			ARCHS='arm64 x86_64' \
 			ONLY_ACTIVE_ARCH=NO \
-			build
+			build 2>&1 | awk '!/warning: Stale file .* is located outside of the allowed root paths\./'
 		if [[ ! -d "$(OUT_DIR)/$$HELPER_PRODUCT" ]]; then
 			echo "ERROR: helper build did not produce $$HELPER_PRODUCT in $(OUT_DIR)"
 			exit 1
