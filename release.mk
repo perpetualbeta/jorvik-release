@@ -504,14 +504,31 @@ build:
 	# Errors suppressed because the recursion hits read-only .git/objects/
 	# entries; we only care about the source tree's actual files.
 	xattr -cr "$(CURDIR)" 2>/dev/null || true
-	# Legacy `_BuildOutput` cleanup: OUT_DIR moved to `.build` (matching the
-	# Swift toolchain convention). Older builds may have left a `_BuildOutput`
-	# directory behind, which xcodebuild's stricter sandbox in Xcode 26+
-	# flags as "Stale file outside allowed root paths". Sweep it on each
-	# build if we're not actively writing there.
-	if [[ -d "$(CURDIR)/_BuildOutput" && "$(OUT_DIR)" != "$(CURDIR)/_BuildOutput" ]]; then
-		rm -rf "$(CURDIR)/_BuildOutput"
-	fi
+	# xcodebuild's stricter sandbox in Xcode 26+ flags artefacts in any
+	# previously-used CONFIGURATION_BUILD_DIR that isn't part of the
+	# current build's outputs as "Stale file outside allowed root paths".
+	# Two sources of those stale paths:
+	#
+	#   (a) other project-root build dirs (the legacy `_BuildOutput/` from
+	#       before we moved to `.build/`, or a project-local `.build/`
+	#       left behind by a `gmake build` when RM is now invoking with a
+	#       temp OUT_DIR);
+	#   (b) the project's `~/Library/Developer/Xcode/DerivedData/<name>-*`
+	#       manifest, which xcodebuild uses to remember past output
+	#       locations across invocations.
+	#
+	# Sweep both. (a) gets the FS clean; (b) gets xcodebuild's memory of
+	# previous OUT_DIRs cleared so the sandbox doesn't reference them at
+	# all. Cost: this xcode build can't use incremental caching from a
+	# previous run — full rebuild every time. For Jorvik xcode projects
+	# (RM, ASCII Saver, Notes Editor, Web Editor, ActiveSpace, Calendar
+	# Upcoming) that's seconds, not minutes.
+	for STALE_DIR in "$(CURDIR)/_BuildOutput" "$(CURDIR)/.build"; do
+		if [[ -d "$$STALE_DIR" && "$(OUT_DIR)" != "$$STALE_DIR" ]]; then
+			rm -rf "$$STALE_DIR"
+		fi
+	done
+	rm -rf "$(HOME)/Library/Developer/Xcode/DerivedData/$(basename $(notdir $(XCODE_PROJECT)))-"*
 	rm -rf "$(OUT_DIR)"
 	mkdir -p "$(OUT_DIR)"
 	xcodebuild -project "$(XCODE_PROJECT)" \
