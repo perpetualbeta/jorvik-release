@@ -89,6 +89,13 @@ ZIP_PATH := $(OUT_DIR)/$(BUNDLE_NAME).zip
 PKG_PATH := $(OUT_DIR)/$(BUNDLE_NAME).pkg
 NOTARIZE_ZIP := $(OUT_DIR)/$(BUNDLE_NAME)-notarize.zip
 
+# LaunchServices registration tool. Used to deregister the staged app bundle in
+# OUT_DIR so it never lingers as a duplicate "Allow in the Menu Bar" entry
+# beside the real /Applications install (LaunchServices indexes any .app it
+# sees, including this build artifact). The shipping copy installs from the
+# signed .pkg; the staged bundle is only an intermediate / RM-verify input.
+LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister
+
 # Install root depends on bundle type.
 ifeq ($(BUNDLE_TYPE),saver)
 INSTALL_ROOT := /Library/Screen Savers
@@ -108,9 +115,10 @@ SDK := $(shell xcrun --sdk macosx --show-sdk-path)
 # contains a space (e.g. "/Users/jonathanhollin/Desktop/Jorvik Software/...").
 # Inside recipes, paths are quoted so the shell handles spaces correctly.
 
-.PHONY: release build stamp sign notarise staple package package-zip package-pkg clean
+.PHONY: release build stamp sign notarise staple package package-zip package-pkg clean _deregister-staged
 
 release: package
+	@$(MAKE) --no-print-directory _deregister-staged
 	@echo "✅ release: $(BUNDLE_NAME) $(VERSION) ($(BUILD_NUMBER))"
 
 # Pipeline order: build → stamp (pre-sign) → sign → notarise → staple → package.
@@ -408,7 +416,26 @@ endif
 	fi
 	rm -rf "$(OUT_DIR)/_pkg_scripts"
 
-clean:
+# Deregister the staged app bundle(s) from LaunchServices so the build artifact
+# doesn't linger as a duplicate "Allow in the Menu Bar" entry beside the real
+# /Applications install. Best-effort — never fails the build. Invoked at the end
+# of `release` (deregister only: RM's post-build Verify stages still read the
+# staged bundle, so we must NOT delete it there) and as a `clean` prerequisite
+# (deregister first, then clean deletes the files — so no phantom registration
+# is left behind, unlike a bare rm).
+_deregister-staged:
+	@if [ -x "$(LSREGISTER)" ]; then
+	  for b in "$(BUILT_BUNDLE)" "$(INSTALLED_BUNDLE)"; do
+	    if [ -d "$$b" ]; then "$(LSREGISTER)" -u "$$b" >/dev/null 2>&1 || true; fi
+	  done
+	  for HELPER in $(HELPER_TARGETS); do
+	    HP=$$(echo "$$HELPER" | cut -d: -f2)
+	    if [ -d "$(OUT_DIR)/$$HP" ]; then "$(LSREGISTER)" -u "$(OUT_DIR)/$$HP" >/dev/null 2>&1 || true; fi
+	  done
+	  echo "→ deregistered staged bundle(s) from LaunchServices"
+	fi
+
+clean: _deregister-staged
 	rm -rf "$(OUT_DIR)/$(PRODUCT_NAME)" "$(OUT_DIR)/$(INSTALL_NAME)" \
 		"$(ZIP_PATH)" "$(PKG_PATH)" "$(NOTARIZE_ZIP)" \
 		"$(OUT_DIR)/_pkg_scripts" "$(OUT_DIR)/_pkg_staging" \
