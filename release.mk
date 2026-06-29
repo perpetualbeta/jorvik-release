@@ -551,9 +551,15 @@ build:
 	# ASCII Saver helper-target build). Killing services, sweeping LS,
 	# and wiping DerivedData all leave the warnings intact. They are
 	# cosmetic — every documented build output lands at the current
-	# OUT_DIR — so the build target filters this specific warning class
-	# out of xcodebuild's stdout/stderr below. All other warnings/errors
-	# pass through unchanged.
+	# OUT_DIR — so the build target filters this warning class out of
+	# xcodebuild's stdout/stderr below. It ALSO drops the unrelated
+	# "iOSSimulator … SimServiceContext … CoreSimulator is out of date …
+	# Simulator device support disabled" line xcodebuild emits when the
+	# on-disk CoreSimulator is older than the active Xcode/CLT — harmless
+	# for our macOS-only builds (clears at the source on reboot / after an
+	# Xcode update finishes installing components). All other warnings and
+	# errors pass through unchanged, and `.SHELLFLAGS … -o pipefail` keeps
+	# xcodebuild's real exit code intact through the awk filter.
 	#
 	# Cost of the cleanup itself: this xcode build can't reuse incremental
 	# caching — full rebuild every time. For the six Jorvik xcode projects
@@ -573,7 +579,7 @@ build:
 		CODE_SIGNING_ALLOWED=NO \
 		ARCHS='arm64 x86_64' \
 		ONLY_ACTIVE_ARCH=NO \
-		build 2>&1 | awk '!/warning: Stale file .* is located outside of the allowed root paths\./'
+		build 2>&1 | awk '!/warning: Stale file .* is located outside of the allowed root paths\./ && !/SimServiceContext sharedServiceContextForDeveloperDir/'
 	# Multi-target build: also compile each helper target into the same
 	# output dir. Helper records are colon-delimited; field 1 is the
 	# Xcode target name, field 2 is the productName for verification.
@@ -588,7 +594,7 @@ build:
 			CODE_SIGNING_ALLOWED=NO \
 			ARCHS='arm64 x86_64' \
 			ONLY_ACTIVE_ARCH=NO \
-			build 2>&1 | awk '!/warning: Stale file .* is located outside of the allowed root paths\./'
+			build 2>&1 | awk '!/warning: Stale file .* is located outside of the allowed root paths\./ && !/SimServiceContext sharedServiceContextForDeveloperDir/'
 		if [[ ! -d "$(OUT_DIR)/$$HELPER_PRODUCT" ]]; then
 			echo "ERROR: helper build did not produce $$HELPER_PRODUCT in $(OUT_DIR)"
 			exit 1
